@@ -1,0 +1,394 @@
+﻿<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>index</title>
+  <link rel="stylesheet" href="https://stackedit.io/style.css" />
+</head>
+
+<body class="stackedit">
+  <div class="stackedit__left">
+    <div class="stackedit__toc">
+      
+<ul>
+<li><a href="#a-deep-dive-into-keycloak">A deep dive into Keycloak</a>
+<ul>
+<li><a href="#start-containers">Start containers</a></li>
+<li><a href="#creating-the-realm">Creating the realm</a></li>
+<li><a href="#create-a-client">Create a client</a></li>
+<li><a href="#configuring-smtp-server">Configuring SMTP server</a></li>
+<li><a href="#enable-user-registration">Enable user registration</a></li>
+<li><a href="#adding-claims-to-the-tokens">Adding claims to the tokens</a></li>
+<li><a href="#require-consent-for-the-application">Require consent for the application</a></li>
+</ul>
+</li>
+<li><a href="#roles-and-groups">Roles and groups</a>
+<ul>
+<li><a href="#users-from-ldap">Users from LDAP</a></li>
+<li><a href="#users-from-github">Users from GitHub</a></li>
+<li><a href="#style-that-login">Style that login</a></li>
+<li><a href="#keys-and-signing-algorithms">Keys and Signing Algorithms</a></li>
+<li><a href="#sessions">Sessions</a></li>
+<li><a href="#events">Events</a></li>
+</ul>
+</li>
+<li><a href="#custom-stuff">Custom stuff</a>
+<ul>
+<li><a href="#cool-stuff-we-didnt-cover">Cool stuff we didn’t cover!</a></li>
+</ul>
+</li>
+</ul>
+
+    </div>
+  </div>
+  <div class="stackedit__right">
+    <div class="stackedit__html">
+      <h1 id="a-deep-dive-into-keycloak">A deep dive into Keycloak</h1>
+<p>This project contains a DIY deep dive into Keycloak.</p>
+<p>The steps included here requires Docker (or Podman). It should also be possible to replicate the steps without Docker by<br>
+adapting the steps accordingly.</p>
+<h2 id="start-containers">Start containers</h2>
+<h3 id="create-a-user-defined-network">Create a user defined network</h3>
+<p>To make it easy to connect Keycloak to LDAP and the mail server create a user defined network:</p>
+<pre><code>docker network create demo-network
+</code></pre>
+<h3 id="start-keycloak">Start Keycloak</h3>
+<p>We’re going to use an extended Keycloak image that includes a custom theme and some custom providers.</p>
+<p>First, build the custom providers and themes with:</p>
+<pre><code>mvn clean install
+</code></pre>
+<p>Then build the image with:</p>
+<pre><code>docker build -t demo-keycloak -f keycloak/Dockerfile .
+</code></pre>
+<p>Finally run it with:</p>
+<pre><code>docker run --name demo-keycloak -e KEYCLOAK_USER=admin -e KEYCLOAK_PASSWORD=admin \
+    -p 8080:8080 --net demo-network demo-keycloak
+</code></pre>
+<h3 id="start-ldap-server">Start LDAP server</h3>
+<p>For the LDAP part of the demo we need an LDAP server running.<br>
+For ldap folder details <a href="ldap.html" target="_blank">click here</a><br>
+First build the image with:</p>
+<pre><code>docker build -t demo-ldap ldap
+</code></pre>
+<p>Then run it with:</p>
+<pre><code>docker run --name demo-ldap --net demo-network demo-ldap
+</code></pre>
+<h3 id="start-mail-server">Start mail server</h3>
+<p>In order to allow Keycloak to send emails we need to configure an SMTP server. MailHog provides an excellent email<br>
+server that can used for testing.</p>
+<p>Start the mail server with:</p>
+<pre><code>docker run -d -p 8025:8025 --name demo-mail --net demo-network mailhog/mailhog
+</code></pre>
+<h3 id="start-js-console-application">Start JS Console application</h3>
+<p>The JS Console application provides a playground to play with tokens issued by Keycloak.</p>
+<p>JS Console directory structure<br>
+<a href="js-console.html">js-console directory details</a></p>
+<p>First build the image with:</p>
+<pre><code>docker build -t demo-js-console js-console
+</code></pre>
+<p>Then run it with:</p>
+<pre><code>docker run --name demo-js-console -p 8000:80 demo-js-console
+</code></pre>
+<h2 id="creating-the-realm">Creating the realm</h2>
+<p>Open <a href="http://localhost:8080/auth/admin/">Keycloak Admin Console</a>. Login with<br>
+username <code>admin</code> and password <code>admin</code>.</p>
+<p>Create a new realm called <code>demo</code> (find the <code>add realm</code> button in the drop-down<br>
+in the top-left corner).</p>
+<p>Once created set a friendly Display name for the realm, for<br>
+example <code>Demo SSO</code>.</p>
+<h2 id="create-a-client">Create a client</h2>
+<p>Now create a client for the JS console by clicking on <code>clients</code> then <code>create</code>.</p>
+<p>Fill in the following values:</p>
+<ul>
+<li>Client ID: <code>js-console</code></li>
+<li>Click <code>Save</code></li>
+</ul>
+<p>On the next form fill in the following values:</p>
+<ul>
+<li>Valid Redirect URIs: <code>http://localhost:8000/*</code></li>
+<li>Web Origins: <code>http://localhost:8000</code></li>
+</ul>
+<h2 id="configuring-smtp-server">Configuring SMTP server</h2>
+<p>First lets set a email address on the admin user so we can test email delivery.</p>
+<p>From the drop-down in the top-left corner select <code>Master</code>. Go to <code>Users</code>, click<br>
+on <code>View all users</code> and select the <code>admin</code> user. Set the <code>Email</code> field to <code>admin@localhost</code>.</p>
+<p>Now switch back to the <code>demo</code> realm, then click on <code>Realm Settings</code> then <code>Email</code>.</p>
+<p>Fill in the following values:</p>
+<ul>
+<li>Host: <code>demo-mail</code><br>
+Port: <code>1025</code></li>
+<li>From: <code>keycloak@localhost</code></li>
+</ul>
+<p>Click <code>Save</code> and <code>Test connection</code>. Open your <a href="http://localhost:8025">http://localhost:8025</a> and check that you have<br>
+received an email from Keycloak.</p>
+<h2 id="enable-user-registration">Enable user registration</h2>
+<p>Let’s enable user self-registration and at the same time require users to verify<br>
+their email address.</p>
+<p>Open the <a href="http://localhost:8080/auth/admin/">Keycloak Admin Console</a>.</p>
+<p>Click on <code>Realm settings</code> then <code>Login</code>.</p>
+<p>Fill in the following values:</p>
+<ul>
+<li>User registration: <code>ON</code></li>
+<li>Verify email: <code>ON</code></li>
+</ul>
+<p>To try this out open the <a href="http://localhost:8000">JS Console</a>.</p>
+<p>You will be automatically redirected to the login screen. Click on <code>Register</code><br>
+and fill in the form. After registering you will be prompted to verify your email<br>
+by clicking on a link in an email sent to your email address.</p>
+<h2 id="adding-claims-to-the-tokens">Adding claims to the tokens</h2>
+<p>What if your applications want to know something else about users? Say you want to have<br>
+an avatar available for your users.</p>
+<p>Keycloak makes it possible to add custom attributes to users as well as adding custom<br>
+claims to tokens.</p>
+<p>First open <code>Users</code> and select the user you registered earlier. Click on attributes and the following attribute:</p>
+<ul>
+<li>Key: <code>avatar_url</code></li>
+<li>Value: <code>https://www.keycloak.org/resources/images/keycloak_logo_480x108.png</code></li>
+</ul>
+<p>Click <code>Add</code> followed by <code>Save</code>.</p>
+<p>Now Keycloak knows the users avatar, but the application also needs access to this. We’re<br>
+going to add this through Client Scopes.</p>
+<p>Click on <code>Client Scopes</code> then <code>Create</code>.</p>
+<p>Fill in the following values:</p>
+<ul>
+<li>Name: <code>avatar</code></li>
+<li>Consent Screen Text: <code>Avatar</code></li>
+</ul>
+<p>Click on <code>Save</code>.</p>
+<p>Click on <code>Mappers</code> then <code>Create</code>. Fill in the following values:</p>
+<ul>
+<li>Name: <code>avatar</code></li>
+<li>Mapper Type: <code>User Attribute</code></li>
+<li>User Attribute <code>avatar_url</code></li>
+<li>Token Claim Name: <code>avatar_url</code></li>
+<li>Claim JSON Type: <code>String</code></li>
+</ul>
+<p>Click <code>Save</code>.</p>
+<p>Now we’ve created a client scope, but we also need to asign it to the client. Go to<br>
+<code>Clients</code> and select <code>js-console</code>. Select <code>Client Scopes</code>.</p>
+<p>We’re going to add it as a <code>Default Client Scope</code>. So select the <code>avatar</code> here and click<br>
+<code>Add selected</code>. As it’s a default scope it is added to the token by default, if it’s<br>
+set as an optional client scope the client has to explicitly request it with the <code>scope</code><br>
+parameter.</p>
+<p>Now go back to the JS Console and click <code>Refresh</code>.</p>
+<h2 id="require-consent-for-the-application">Require consent for the application</h2>
+<p>So far we’ve assumed the JS Console is an internal trusted application, but what if it’s<br>
+a third party application? In that case we probably want the user to grant access to what the application wants to have<br>
+access to.</p>
+<p>Open the <a href="http://localhost:8080/auth/admin/">Keycloak Admin Console</a>.</p>
+<p>Go to <code>Clients</code>, select <code>JS Console</code> and turn on <code>Consent Required</code>.</p>
+<p>Go back to the <a href="http://localhost:8000">JS Console</a> and click <code>Login</code> again. Now Keycloak will prompt the user to grant<br>
+access to the application.</p>
+<p>You may want to turn this off again before continuing.</p>
+<h1 id="roles-and-groups">Roles and groups</h1>
+<p>Keycloak has supports for both roles and groups.</p>
+<p>Roles can be added realm-wide or to specific applications. There is also support for<br>
+composite roles where a role can be a composite of other roles. This allows for instance<br>
+creating a <code>default</code> role that can be added to all users, but in turn easily managing what<br>
+roles all the users with the <code>default</code> role will have.</p>
+<p>Groups have a parent/child relationship where a child inherits from its parent. Groups can<br>
+be mapped to roles, have attributes or just added directly to the token for your application<br>
+to resolve its meaning.</p>
+<p>Let’s start by creating a role and see it in the token.</p>
+<p>Open the <a href="http://localhost:8080/auth/admin/">Keycloak Admin Console</a>.</p>
+<p>Click on <code>Roles</code> and <code>Add Role</code>. Set the Role Name to <code>user</code> and click <code>Save</code>.</p>
+<p>Now click on <code>Users</code> and find the user you want to login with. Click on <code>Role Mappings</code>.<br>
+Select <code>user</code> from Available roles and click <code>Add selected</code>.</p>
+<p>Go back to the <a href="http://localhost:8000">JS Console</a> and click <code>Refresh</code>, then <code>Access Token JSON</code>.<br>
+Notice that there is a <code>realm_access</code> claim in the token that now contains the user role.</p>
+<p>Next let’s create a Group. Go back to the <a href="http://localhost:8080/auth/admin/">Keycloak Admin Console</a>.</p>
+<p>Click on <code>New</code> and use <code>mygroup</code> as the Name. Click on <code>Attributes</code> and add key <code>user_type</code> with value <code>consumers</code>.</p>
+<p>Now let’s make sure this group and the claim is added to the token. Go to <code>Client Scopes</code> and click <code>Create</code>.<br>
+For the name use <code>myscope</code>.</p>
+<p>Click on <code>Mappers</code>. Click on <code>Create</code>.</p>
+<p>Fill in the following values:</p>
+<ul>
+<li>Name: <code>groups</code></li>
+<li>Mapper Type: <code>Group Membership</code></li>
+<li>Token Claim Name: <code>groups</code></li>
+</ul>
+<p>Click <code>Save</code> then go back to <code>Mappers</code> and click <code>Create</code> again.</p>
+<p>Fill in the following values:</p>
+<ul>
+<li>Name: <code>type</code></li>
+<li>Mapper Type: <code>User Attribute</code></li>
+<li>User Attribute: <code>user_type</code></li>
+<li>Token Claim Name: <code>user_type</code></li>
+<li>Claim JSON Type: <code>String</code></li>
+</ul>
+<p>Find the <code>js-console</code> client again and add the <code>myscope</code> as a default client scope.</p>
+<p>Go back to the <a href="http://localhost:8000">JS Console</a> and click <code>Refresh</code>, then <code>Access Token JSON</code>.<br>
+Notice that there is a <code>groups</code> claim in the token as well as a <code>user_type</code> claim.</p>
+<h2 id="users-from-ldap">Users from LDAP</h2>
+<p>Now let’s try to load users from LDAP into Keycloak.</p>
+<p>Open the admin console again. Click on <code>User Federation</code>, select <code>ldap</code> from the<br>
+drop-down.</p>
+<p>Fill in the following values:</p>
+<ul>
+<li>Edit Mode: <code>WRITABLE</code></li>
+<li>Vendor: <code>other</code></li>
+<li>Connection URL: <code>ldap://demo-ldap:389</code></li>
+<li>Users DN: <code>ou=People,dc=example,dc=org</code></li>
+<li>Bind DN: <code>cn=admin,dc=example,dc=org</code></li>
+<li>Bind Credential: <code>admin</code></li>
+<li>Trust Email: <code>ON</code></li>
+</ul>
+<p>Click on <code>Save</code> then click on <code>Synchronize all users</code>.</p>
+<p>Now go to <code>Users</code> and click <code>View all users</code>. You will see two new users <code>bwilson</code> and<br>
+<code>jbrown</code>. Both these users have the password <code>password</code>.</p>
+<p>Try opening the <a href="http://localhost:8000">JS Console</a> again and login with one of<br>
+these users.</p>
+<h2 id="users-from-github">Users from GitHub</h2>
+<p>Now that we have users in Keycloak as well as loading users from LDAP let’s get users<br>
+from an external Identity Provider. For simplicity we’ll use GitHub, but the same<br>
+approach works for a corporate identity provider and other social networks.</p>
+<p>Open the <a href="http://localhost:8080/auth/admin/">Keycloak Admin Console</a>.</p>
+<p>Click on <code>Identity Providers</code>. From the drop-down select <code>GitHub</code>. Copy the value<br>
+in <code>Redirect URI</code>. You’ll need this in a second when you create a new OAuth<br>
+application in GitHub.</p>
+<p>In a new tab open <a href="https://github.com/settings/applications/new">Register a new OAuth application</a>.</p>
+<p>Fill in the following values:</p>
+<ul>
+<li>Application name: Keycloak</li>
+<li>Homepage URL: </li>
+<li>Authorization callback URL: </li>
+</ul>
+<p>Now copy the value for <code>Client ID</code> and <code>Client Secret</code> from GitHub to the Keycloak<br>
+Admin Console.</p>
+<p>We also want to add a mapper to retrieve the avatar from GitHub. Click on<br>
+<code>Mappers</code> and <code>Create</code>.</p>
+<p>Fill in the following values:</p>
+<ul>
+<li>Name: <code>avatar</code></li>
+<li>Mapper Type: <code>Attribute Importer</code></li>
+<li>Social Profile JSON Field Path: <code>avatar_url</code></li>
+<li>User Attribute Name: <code>avatar_url</code></li>
+</ul>
+<p>Try opening the <a href="http://localhost:8000">JS Console</a> again and instead of providing<br>
+a username or password click on <code>GitHub</code>.</p>
+<p>Notice how it automatically knows your name and also has your avatar.</p>
+<h2 id="style-that-login">Style that login</h2>
+<p>Perhaps you don’t want the login screen to look like a Keycloak login screen, but rather<br>
+add a splash of your own styling to it?</p>
+<p>The Keycloak Docker image we built earlier actually contains a custom theme, so we<br>
+have one ready to go.</p>
+<p>Open the <a href="http://localhost:8080/auth/admin/">Keycloak Admin Console</a>.</p>
+<p>Click on <code>Realm Settings</code> then <code>Themes</code>. In the drop-down under <code>Login Theme</code> select<br>
+<code>sunrise</code>.</p>
+<p>Try opening the <a href="http://localhost:8000">JS Console</a> to login a take in the beauty of the<br>
+new login screen!</p>
+<p>You may want to change it back before you continue ;).</p>
+<h2 id="keys-and-signing-algorithms">Keys and Signing Algorithms</h2>
+<p>By default Keycloak signs tokens with RS256, but we have support for other signing<br>
+algorithms. We also have support for a single realm to have multiple keys.</p>
+<p>It’s even possible to change signing algorithms and signing keys transparently without<br>
+any impact to users.</p>
+<p>Let’s first try to change the signing algorithm for the JS console client.</p>
+<p>First let’s see what algorithm is currently in use. Open the <a href="http://localhost:8000">JS Console</a>,<br>
+login, then click on <code>ID Token</code>. This will display a rather cryptic string, which is<br>
+the encoded token. Copy this value, making sure you select everything.</p>
+<p>In a different tab open the <a href="http://localhost:8080/auth/realms/demo/jwt">JWT validation extension</a>.<br>
+This is a custom extension to Keycloak that allows decoding a token as well as verifying the<br>
+signature of the token.</p>
+<p>What we’re interested is in the header. The field <code>alg</code> will show what signing algorithm is<br>
+used to sign the token. It should show <code>RS256</code>.</p>
+<p>Now let’s change this to the new cool kid on the block, <code>ES256</code>.</p>
+<p>Open the <a href="http://localhost:8080/auth/admin/">Keycloak Admin Console</a> in a new tab. Make sure you<br>
+keep the JS Console open as we want to show how it gets new tokens without having to re-login.</p>
+<p>Click on <code>Clients</code> and select the <code>js-console</code> client. Under <code>Fine Grained OpenID Connect Configuration</code><br>
+switch <code>Access Token Signature Algorithm</code> and <code>ID Token Signature Algorithm</code> to <code>ES256</code>.</p>
+<p>Now go back to the JS Console and click on <code>Refresh</code>. This will use the Refresh Token to<br>
+obtain new updated ID and Access tokens.</p>
+<p>Click on <code>ID Token</code>, copy it and open the <a href="http://localhost:8080/auth/realms/demo/jwt">JWT validation extension</a><br>
+again. Notice that now the tokens are signed with <code>ES256</code> instead of <code>RS256</code>.</p>
+<p>While you’re looking at the <code>ID Token</code> take a note of the kid, try to remember the first few characters.<br>
+The <code>kid</code> refers to the keypair used to sign the token.</p>
+<p>Go back to the <a href="http://localhost:8080/auth/admin/">Keycloak Admin Console</a>. Go to<br>
+<code>Realm Settings</code> then <code>Keys</code>. What we’re going to do now is introduce a new set of active keys and<br>
+mark the previous keys as no longer the active keys.</p>
+<p>Click on <code>Providers</code>. From the drop-down select <code>ecdsa-generated</code>. Set the priority to <code>200</code> and click<br>
+Save. As the priority is higher than the current active keys the new keys will be used next time<br>
+tokens are signed.</p>
+<p>Now go back to the JS Console and clik on <code>Refresh</code>. Copy the token to the <a href="http://localhost:8080/auth/realms/demo/jwt">JWT validation extension</a>.<br>
+Notice that the <code>kid</code> has now changed.</p>
+<p>What this does is provide a seamless way of changing signatures and keys. Currently logged-in users<br>
+will receive new tokens and cookies over time and after a while you can safely remove the old keys<br>
+without affecting any logged-in users.</p>
+<h2 id="sessions">Sessions</h2>
+<p>Make sure you have the <a href="http://localhost:8000">JS Console</a> open in a tab and you’re logged-in.<br>
+Open the <a href="http://localhost:8080/auth/admin/">Keycloak Admin Console</a> in another tab.</p>
+<p>Find the user you are logged-in as and click on <code>Sessions</code>. Click on <code>Logout all session</code>.</p>
+<p>Go back to the <a href="http://localhost:8000">JS Console</a> and click <code>Refresh</code>. Notice how you are<br>
+now longer authenticated.</p>
+<p>Not only can admins log out users, but users themselves can logout other sessions from the<br>
+account management console.</p>
+<h2 id="events">Events</h2>
+<p>Open the <a href="http://localhost:8080/auth/admin/">Keycloak Admin Console</a>. Click on <code>Events</code><br>
+and <code>Config</code>. Turn on <code>Save Events</code> and click <code>Save</code>.</p>
+<p>Go back to the <a href="http://localhost:8000">JS Console</a> and click <code>Refresh</code>. Logout. Then<br>
+when you log in use the wrong password, then login with the correct password.</p>
+<p>Go back to the <code>Events</code> in the <a href="http://localhost:8080/auth/admin/">Keycloak Admin Console</a><br>
+and notice how there are now a list of events.</p>
+<p>Not only can Keycloak save these events to be able to display them in the admin console<br>
+and account management console, but you can develop your own event listener that can<br>
+do what you want with the events.</p>
+<h1 id="custom-stuff">Custom stuff</h1>
+<p>Keycloak has a huge number of SPIs that allow you to develop your own custom providers.<br>
+You can develop custom user stores, protocol mappers, authenticators, event listeners<br>
+and a large number of other things. We have about 100 SPIs so you can customize a lot!</p>
+<p>When we previously deployed Keycloak we also included a custom authenticator that enables<br>
+users to login through <code>email</code>.</p>
+<p>To enable this open the <a href="http://localhost:8080/auth/admin/">Keycloak Admin Console</a>.<br>
+Click on <code>Authentication</code>.</p>
+<p>Click on <code>Copy</code> to create a new flow based on the <code>browser</code> flow. Use the name <code>My Browser Flow</code>.</p>
+<p>Click on <code>Actions</code> and <code>Delete</code> for <code>Username Password Form</code> and <code>OTP Form</code>.</p>
+<p>Click on <code>Actions</code> next to <code>Browser-email forms</code>. Then click on <code>Add execution</code>.<br>
+Select <code>Magic Link</code> from the list. Once it’s saved select <code>Required</code> for the <code>Magic Link</code>.</p>
+<p>Now to use this new flow when users login select <code>Bindings</code> and select <code>My Browser Flow</code> for the<br>
+<code>Browser flow</code>.</p>
+<p>Open the <a href="http://localhost:8000">JS Console</a> and click Logout. For the email enter your email<br>
+address and click <code>Log In</code>. Open your email and you should have a mail with a link which will<br>
+authenticate you and bring you to the JS Console.</p>
+<p>Now let’s add WebAuthn to the mix. Open the <a href="http://localhost:8080/auth/admin/">Keycloak Admin Console</a>.<br>
+Go back to the <code>Browser-email</code> flow. Click <code>Actions</code> and <code>Add execution</code>. Select <code>WebAuthn Authenticator</code>. Then<br>
+mark it as <code>Required</code>. You also need to register the WebAuthn required action.</p>
+<p>Select <code>Required Actions</code>, <code>Register</code>, then select <code>WebAuthn Register</code> and click <code>Ok</code>.</p>
+<p>Open the <a href="http://localhost:8000">JS Console</a> and click Logout. Login again. After you’ve done the<br>
+email based login you will be prompted to configure WebAuthn. You’ll need a WebAuthn security key to try this out.</p>
+<h2 id="cool-stuff-we-didnt-cover">Cool stuff we didn’t cover!</h2>
+<h3 id="clustering-and-caching">Clustering and Caching</h3>
+<p>Keycloak leverages Infinispan to cache everything loaded from the database and user stores<br>
+like LDAP. This removes the need to go to the database for every request.</p>
+<p>Infinispan also enables us to provide a clustered mode where user sessions are distributed<br>
+throughout the cluster. Enabling load balancing as well as redundancy.</p>
+<p>Not only does Infinispan allow us to cluster within a single data center, but we also have<br>
+support for multiple data centers. This works, but there are a few improvements that can be made<br>
+here.</p>
+<h3 id="authorization-services">Authorization Services</h3>
+<p>Keycloak provides a way to centrally manage permissions for resources as well as support for<br>
+UMA 2.0 that enables users themselves to manage permissions to their own resources.</p>
+<p>Hopefully, soon we will have a DevNation Live session focusing only on this feature.</p>
+<h3 id="dynamic-client-registration">Dynamic Client Registration</h3>
+<p>Keycloak has a very powerful dynamic client registration service that allows users and applications<br>
+themselves to register clients through a REST API. This supports clients defined in Keycloak’s<br>
+own client representation, standard OpenID Connect client format as well as SAML 2.0 client format.</p>
+<p>It is also possible to define policies on what is permitted. For example you can restrict this<br>
+service to specific IP ranges, automatically require consent and a lot of other policies. You can<br>
+also develop your own custom policies.</p>
+<h3 id="openid-connect-and-saml-2.0">OpenID Connect and SAML 2.0</h3>
+<p>Keycloak provides support for both OpenID Connect and SAML 2.0. There’s even community<br>
+maintained extensions for WS-Fed and CAS.</p>
+<h3 id="adapters-and-the-keycloak-gatekeeper">Adapters and the Keycloak Gatekeeper</h3>
+<p>If you missed the last DevNation Live session on Keycloak make sure to watch the recording.<br>
+We covered how you can easily secure your applications with Keycloak.</p>
+<h3 id="loads-more...">Loads more…</h3>
+<p>For more information about Keycloak check out our <a href="https://www.keycloak.org">homepage</a> and<br>
+our <a href="https://www.keycloak.org/documentation.html">documentation</a>.</p>
+
+    </div>
+  </div>
+</body>
+
+</html>
